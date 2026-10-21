@@ -5,10 +5,73 @@ Copyright 2026 Grafana Labs
 package config
 
 import (
+	"context"
 	"testing"
 
+	ujconfig "github.com/crossplane/upjet/v2/pkg/config"
 	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
 )
+
+func TestMetricsEndpointScrapeJobExternalName(t *testing.T) {
+	resource := &ujconfig.Resource{Name: "grafana_connections_metrics_endpoint_scrape_job"}
+	ExternalNameConfigurations()(resource)
+	externalName := resource.ExternalName
+	parameters := map[string]any{"stack_id": "12345", "name": "existing:job"}
+	want := "12345:existing:job"
+
+	id, err := externalName.GetIDFn(context.Background(), "", parameters, nil)
+	if err != nil || id != want {
+		t.Fatalf("discovery ID = %q, %v; want %q", id, err, want)
+	}
+	for _, stateID := range []any{nil, "", want} {
+		state := map[string]any{"stack_id": "12345", "name": "existing:job"}
+		if stateID != nil {
+			state["id"] = stateID
+		}
+		got, err := externalName.GetExternalNameFn(state)
+		if err != nil || got != want {
+			t.Fatalf("external name with state ID %v = %q, %v; want %q", stateID, got, err, want)
+		}
+	}
+
+	importID := "67890:imported:job"
+	id, err = externalName.GetIDFn(context.Background(), importID, parameters, nil)
+	if err != nil || id != importID {
+		t.Fatalf("import ID = %q, %v; want %q", id, err, importID)
+	}
+	got, err := externalName.GetExternalNameFn(map[string]any{"id": importID})
+	if err != nil || got != importID {
+		t.Fatalf("import external name = %q, %v; want %q", got, err, importID)
+	}
+	externalName.SetIdentifierArgumentFn(parameters, importID)
+	if parameters["name"] != "existing:job" || parameters["stack_id"] != "12345" {
+		t.Fatalf("identifier mapping changed parameters: %v", parameters)
+	}
+	if !externalName.DisableNameInitializer || len(externalName.OmittedFields) != 0 {
+		t.Fatal("name initialization or field omission changed")
+	}
+}
+
+func TestMetricsEndpointScrapeJobExternalNameMissingIdentity(t *testing.T) {
+	resource := &ujconfig.Resource{Name: "grafana_connections_metrics_endpoint_scrape_job"}
+	ExternalNameConfigurations()(resource)
+	for name, attributes := range map[string]map[string]any{
+		"missing stack": {"name": "job"},
+		"empty stack":   {"stack_id": "", "name": "job"},
+		"numeric stack": {"stack_id": 12345, "name": "job"},
+		"missing name":  {"stack_id": "12345"},
+		"empty name":    {"stack_id": "12345", "name": ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := resource.ExternalName.GetExternalNameFn(attributes); err == nil {
+				t.Fatal("expected error extracting incomplete identity")
+			}
+			if _, err := resource.ExternalName.GetIDFn(context.Background(), "", attributes, nil); err == nil {
+				t.Fatal("expected error constructing incomplete discovery ID")
+			}
+		})
+	}
+}
 
 func TestShouldTreatDiagnosticsAsResourceNotFound(t *testing.T) {
 	isNotFound := identifierFromProviderTreatingNotFoundDiagnostics().IsNotFoundDiagnosticFn

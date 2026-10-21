@@ -5,6 +5,7 @@ Copyright 2021 Upbound Inc.
 package config
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -41,7 +42,31 @@ func ExternalNameConfigurations() config.ResourceOption {
 		if _, ok := GroupMap[r.Name]; ok {
 			r.ExternalName = identifierFromProviderTreatingNotFoundDiagnostics()
 		}
+		if r.Name == "grafana_connections_metrics_endpoint_scrape_job" {
+			r.ExternalName.GetExternalNameFn = metricsEndpointScrapeJobID
+			r.ExternalName.GetIDFn = func(_ context.Context, externalName string, parameters, _ map[string]any) (string, error) {
+				if externalName != "" {
+					return externalName, nil
+				}
+				return metricsEndpointScrapeJobID(parameters)
+			}
+		}
 	}
+}
+
+func metricsEndpointScrapeJobID(attributes map[string]any) (string, error) {
+	if id, ok := attributes["id"].(string); ok && id != "" {
+		return id, nil
+	}
+	stackID, ok := attributes["stack_id"].(string)
+	if !ok || stackID == "" {
+		return "", fmt.Errorf("cannot get stack_id attribute")
+	}
+	jobName, ok := attributes["name"].(string)
+	if !ok || jobName == "" {
+		return "", fmt.Errorf("cannot get name attribute")
+	}
+	return stackID + ":" + jobName, nil
 }
 
 func identifierFromProviderTreatingNotFoundDiagnostics() config.ExternalName {
